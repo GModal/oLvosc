@@ -34,7 +34,7 @@ As a separate thread it is more reliable than the standard non-blocking OSC serv
 
 ## Demos, LÖVE & Lua
 
-The console-only Lua demos are here.
+The console-only [Lua demos are here](https://github.com/GModal/oLvosc/blob/main/oLvosc_Lua_demo/README.md).
 
 A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://github.com/GModal/oLvgui/blob/main/oLvDemos.md) (not all demo feature OSC) and the [demo source code](https://github.com/GModal/oLvgui/tree/main/demo_src) also.
 
