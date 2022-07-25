@@ -1,8 +1,8 @@
 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
 -- "oLvosc" by Doug Garmon, 2022
 -- MINI1MAL OSC packing/unpacking & send/receive implementation for lua/love2d
--- 	License: "The Unlicense"
--- 	For more information, please refer to <https://unlicense.org/>
+-- MIT License
+-- Copyright (c) 2022 Doug Garmon
 do
 -- KEEP this do
 local oLvosc = {}

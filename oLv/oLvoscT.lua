@@ -1,8 +1,8 @@
 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
 -- "oLvoscT" by Doug Garmon, 2022
 -- OSC threaded (blocking) server, for LÖVE
---  License: "The Unlicense"
--- 	For more information, please refer to <https://unlicense.org/>
+-- MIT License
+-- Copyright (c) 2022 Doug Garmon
 do
 -- KEEP this do
 local oLvoscT = {}
