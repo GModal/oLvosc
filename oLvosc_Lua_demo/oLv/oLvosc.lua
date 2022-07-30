@@ -10,11 +10,10 @@ local oLvosc = {}
 local socket = require "socket"
 local mtab = {0, 3, 2, 1}
 
-local function lpak(_, fmt, ttbl)
-  return string.pack(fmt, ttbl)
+local function lpak(_, ...)
+  return string.pack(...)
 end
 
--- function substitues so this module will work with love2d (>=11) and lua (>=5.3)
 local oLvpk
 if love ~= nil then
   oLvpk= {pack = love.data.pack, unpack = love.data.unpack}
@@ -44,6 +43,13 @@ end
 function oLvosc.sleep(tm)
     socket.sleep(tm)
 end
+
+-- returns int secs, int fraction, float fraction, epoch time
+function oLvosc.time()
+  local tm = socket.gettime()
+  local i,f  = math.modf(tm + 2208988800)
+    return i, math.floor(f * 2147483647), f, tm
+end
 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
 -- some utility functions
 -- pack MIDI data for send
@@ -57,6 +63,17 @@ end
 function oLvosc.unpackMIDI(mPack)
   local mChan, mStatus, mByte1, mByte2 = oLvpk.unpack('BBBB', mPack)
   return mChan, mStatus, mByte1, mByte2
+end
+
+function oLvosc.packTIME(tsec, tfrac)
+  local tpk
+  tpk = oLvpk.pack('string','II', tsec, tfrac)
+  return tpk
+end
+
+function oLvosc.unpackTIME(tPack)
+  local tsec, tfrac = oLvpk.unpack('II', tPack)
+  return tsec, tfrac
 end
 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
 -- osc client functions START
@@ -120,6 +137,8 @@ else
           strl = strl..oLvpk.pack('string', '>d', msgTab[argC])
         elseif types == 'm' then
           strl = strl..oLvpk.pack('string', 'c4', msgTab[argC])
+        elseif types == 't' then
+          strl = strl..oLvpk.pack('string', 'c8', msgTab[argC])
         elseif types == 'N' or types == 'T' or types == 'F' or types == 'I' then
         end
       end
@@ -231,6 +250,10 @@ local dTbl = {}
       elseif tc == 'm' then
         iv, nx = oLvpk.unpack("c4", oD)
         oD = string.sub(oD, 5)
+        table.insert(dTbl, iv)
+      elseif tc == 't' then
+        iv, nx = oLvpk.unpack("c8", oD)
+        oD = string.sub(oD, 9)
         table.insert(dTbl, iv)
       elseif tc == 'h' then
         iv, nx = oLvpk.unpack(">i8", oD)

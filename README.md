@@ -64,7 +64,7 @@ A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://gi
 
 ## oLvosc Data Functions
 
-`packet = oLvosc.oscPacket (address_str, type_str, msg_table)`
+`packet = oLvosc.oscPacket(address_str, type_str, msg_table)`
 
   * Encodes an address string, a type string and a table of messages into a UDP packet
     * packet is ready for sending ( oLvosc.sendOSC(server, packet) )
@@ -98,6 +98,34 @@ A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://gi
 `mChannel, mStatus, mByte1, mByte2 = oLvosc.unpackMIDI(midi_packet)`
 
   * Decodes a MIDI sub-packet into the four original bytes
+
+## New with 0.1.2:
+
+### Data tag 't' added: OSC Timetag
+
+  * Encoding and decoding, sending and receiving of timetags 't' added to data functions.
+
+### Time functions
+
+`time_secs, time_fraction, fraction_as_float, epoch_time = oLvosc.time()`
+
+  * Returns the current time (OSC, which is NPT time) as:
+    * Time in seconds since Jan 1, 1900 (32 bit integer)
+    * Additional fraction of second (32 bit integer)
+    * That fraction as a float
+    * The current time as Unix 'Epoch' time
+
+`time_packet = oLvosc.packTIME(time_seconds, time_fraction)`
+
+  * Encodes time in seconds, fractions of seconds (both integers)
+    * 'OSC timetag' is the same as NTP time: time since Jan 1, 1900
+  * Returns a packed 8-byte data blk of OSC (NTP) format time
+
+`time_secs, time_fraction = oLvosc.unpackTIME(tPack)`
+
+  * Takes a timetag binary packet
+  * Returns time in seconds, fractions of seconds
+
 
 ## oLvosc Examples
 
