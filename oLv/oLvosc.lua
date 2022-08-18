@@ -8,6 +8,7 @@ do
 local oLvosc = {}
 
 local socket = require "socket"
+local utf8 = require("utf8")
 local mtab = {0, 3, 2, 1}
 
 local function lpak(_, ...)
@@ -25,9 +26,8 @@ end
 -- osc private functions
 local endpad = string.char(0, 0, 0, 0)
 function oscString (Str)
-local newS, mod
-	newS = Str..string.char(0x0)
-	mod = string.len(newS) % 4
+	local newS = Str..string.char(0x0)
+	local mod = string.len(newS) % 4
 return(newS..string.sub(endpad, 1, mtab[mod + 1]))
 end
 
@@ -44,6 +44,16 @@ function oLvosc.sleep(tm)
     socket.sleep(tm)
 end
 
+function align4(n)
+  return (math.floor((n-1)/4) + 1) * 4
+end
+
+function padBin(binD)
+  local nwD = binD
+  for i=1, align4(#binD)-#binD do nwD = nwD..string.char(0) end
+  return nwD
+end
+
 -- returns int secs, int fraction, float fraction, epoch time
 function oLvosc.time()
   local tm = socket.gettime()
@@ -53,9 +63,8 @@ end
 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
 -- some utility functions
 -- pack MIDI data for send
-function oLvosc.packMIDI(mChan, mStatus, mByte1, mByte2)
-  local mPack 
-  mPack = oLvpk.pack('string','BBBB', mChan, mStatus, mByte1, mByte2)
+function oLvosc.packMIDI(mChan, mStatus, mByte1, mByte2) 
+  local mPack = oLvpk.pack('string','BBBB', mChan, mStatus, mByte1, mByte2)
   return mPack
 end
 
@@ -66,14 +75,18 @@ function oLvosc.unpackMIDI(mPack)
 end
 
 function oLvosc.packTIME(tsec, tfrac)
-  local tpk
-  tpk = oLvpk.pack('string','II', tsec, tfrac)
+  local tpk = oLvpk.pack('string','II', tsec, tfrac)
   return tpk
 end
 
 function oLvosc.unpackTIME(tPack)
   local tsec, tfrac = oLvpk.unpack('II', tPack)
   return tsec, tfrac
+end
+
+function oLvosc.unpackBLOB(bPack)
+  iv, nx = oLvpk.unpack(">i", bPack)
+  return iv, string.sub(bPack, 5, iv + 4)
 end
 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
 -- osc client functions START
@@ -95,23 +108,26 @@ function oLvosc.sendOSC(cudp, pack)
 end
 
 -- Creates an OSC packet
--- currently accepts the following types (NOTE: some 1.0 types have collisions with newly defined types- 'F','I'):
+-- currently accepts the following types:
 -- s  string
 -- S  alt string
--- f  float (32-bit)
+-- c  a char (32 bit int)
 -- i  int (32-bit)
+-- m  MIDI data, four bytes: channel, status, d1, d2
+-- t  TIME data, two 32 ints: seconds, fraction of seconds
+-- f  float (32-bit)
+-- b  BLOB data, binary bytes
 -- h  signed int (64-bit)
--- H  unsigned int (64-bit)
 -- d  double float (64-bit)
--- m  MIDI: 32 bit # -- midi channel, Status byte (msg type), data1, data2
-
---        The following have no data block
+--        The following have NO data block (but are DEcoded to a string: 'NIL', 'TRUE', etc...
 -- N  NIL
 -- T  TRUE
 -- F  FALSE
 -- I  Infinitum
+-- [  Array begin
+-- ]  Array end
 function oLvosc.oscPacket (addrS, typeS, msgTab)
-local strl, types
+local strl, types --, tBlb
 
 if  typeS == nil then
   strl = oscString(addrS)..oscType('') -- no type & no data...EMPTY type block included in msg (comma and three zeros)
@@ -121,25 +137,29 @@ else
     if msgTab ~= nil then -- add data if type has arguments...some do not
     for argC = 1, #msgTab do
       types = string.sub(typeS, argC, argC)
-        if types == 's' then 
+        if types == 's' or types == 'S' then 
           strl = strl..oscString(msgTab[argC])
-        elseif types == 'S' then
-          strl = strl..oscSymbol(msgTab[argC])
         elseif types == 'f' then
           strl = strl..oLvpk.pack('string', '>f', msgTab[argC])
         elseif types == 'i' then
           strl = strl..oLvpk.pack('string', '>i', msgTab[argC])
+        elseif types == 'b' then 
+          local tBlb = padBin(msgTab[argC])
+          strl = strl..oLvpk.pack('string', '>i', #msgTab[argC])..tBlb
         elseif types == 'h' then
           strl = strl..oLvpk.pack('string', '>i8', msgTab[argC])
-        elseif types == 'H' then
-          strl = strl..oLvpk.pack('string', '>I8', msgTab[argC])
         elseif types == 'd' then
           strl = strl..oLvpk.pack('string', '>d', msgTab[argC])
+        elseif types == 'c' then
+          strl = strl..oLvpk.pack('string', '>I', tostring( utf8.codepoint(msgTab[argC])))
         elseif types == 'm' then
           strl = strl..oLvpk.pack('string', 'c4', msgTab[argC])
         elseif types == 't' then
           strl = strl..oLvpk.pack('string', 'c8', msgTab[argC])
-        elseif types == 'N' or types == 'T' or types == 'F' or types == 'I' then
+        elseif types == 'N' or types == 'T' or types == 'F' or types == 'I' or types == string.char(91) or types == string.char(93) then
+          -- no data
+        else
+          return (nil)  -- unknown type
         end
       end
     end
@@ -186,8 +206,9 @@ end
 -- **************************
 function oLvosc.oscUnpack(udpM)
 local oA ,oT, oD
+  
 	oA = udpM:match("^[%p%w]+%z+")
-  oT = udpM:match(",%a+")
+  oT = udpM:match(',[%a%[+%]+]+')
   if oA ~= nil then
     local aBlk = #oA 
     oA = oA:gsub('%z', '')
@@ -212,16 +233,24 @@ function oLvosc.oscAddrSplit(addr)
   return splt
 end
 -- unpack OSC data block
--- currently unpacks the following types (some are liblo extended):
+-- currently unpacks the following types:
 -- s  string
 -- S  alt string
+-- c  a char (but 32 bit int)
 -- i  int (32-bit)
--- I  unsigned int (32-bit) -- we SEND an 'Infinitum', but RECEIVE an 'unsigned INT'... thanks Ardour :-)
 -- m  MIDI data, four bytes: channel, status, d1, d2
+-- t  TIME data, two 32 ints: seconds, fraction of seconds
 -- f  float (32-bit)
+-- b  BLOB data, binary bytes
 -- h  signed int (64-bit)
--- H  unsigned int (64-bit)   -- There are ISSUES with 64 bit Ints in Love 11.3, this might not work as expected
 -- d  double float (64-bit)
+--        These have no data block; a string ID is inserted in unpack table:
+-- N  'NIL'
+-- T  'TRUE'
+-- F  'FALSE'
+-- I  'INFINITUM'
+-- [  'ARRAY_BEGIN'
+-- ]  'ARRAY_END'
 function oLvosc.oscDataUnpack(oT, oD)
 local tc, iv, nx, zloc
 local dTbl = {}
@@ -239,14 +268,19 @@ local dTbl = {}
         nx = zloc + mtab[zloc % 4 + 1]
         oD = string.sub(oD, nx + 1)
         table.insert(dTbl, tostring(iv))
-      elseif tc == 'i' then
+      elseif tc == 'b' then
+        iv, nx = oLvpk.unpack(">i", oD)
+        local blb = string.sub(oD, 1, iv + nx)  
+        oD = string.sub(oD, align4(iv -1) + nx)
+        table.insert(dTbl, blb)
+      elseif tc == 'i' or tc == 'r' then
         iv, nx = oLvpk.unpack(">i", oD)
         oD = string.sub(oD, 5)
         table.insert(dTbl, tonumber(iv))
-      elseif tc == 'I' then
-        iv, nx = oLvpk.unpack(">I", oD)
+      elseif tc == 'c' then
+        iv, nx = oLvpk.unpack(">i", oD)
         oD = string.sub(oD, 5)
-        table.insert(dTbl, tonumber(iv))
+        table.insert(dTbl, utf8.char(iv))
       elseif tc == 'm' then
         iv, nx = oLvpk.unpack("c4", oD)
         oD = string.sub(oD, 5)
@@ -259,14 +293,22 @@ local dTbl = {}
         iv, nx = oLvpk.unpack(">i8", oD)
         oD = string.sub(oD, 9)
         table.insert(dTbl, tonumber(iv))
-      elseif tc == 'H' then
-        iv, nx = oLvpk.unpack(">I8", oD)
-        oD = string.sub(oD, 9)
-        table.insert(dTbl, tonumber(iv))
       elseif tc == 'd' then
         iv, nx = oLvpk.unpack(">d", oD)
         oD = string.sub(oD, 9)
         table.insert(dTbl, tonumber(iv))
+      elseif tc == 'I' then
+        table.insert(dTbl, 'INFINITUM')
+      elseif tc == 'T' then
+        table.insert(dTbl, 'TRUE')
+      elseif tc == 'F' then
+        table.insert(dTbl, 'FALSE')
+      elseif tc == 'N' then
+        table.insert(dTbl, 'NIL')
+      elseif tc == string.char(91) then
+        table.insert(dTbl, 'ARRAY_BEGIN')
+      elseif tc == string.char(93) then
+        table.insert(dTbl, 'ARRAY_END')
       end
     end
   end

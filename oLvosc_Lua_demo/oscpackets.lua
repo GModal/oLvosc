@@ -1,36 +1,70 @@
 local oLvosc = require "oLv/oLvosc"
 local sudp
 
+function align4(n)
+  return (math.floor((n)/4) + 1) * 4
+end
+
 function oscDumpBin(udpM)
   local padtab = {4, 3, 2, 1}
   local wd = 12
   local oA, oT, oD, cnt
-  local typePad = 0
-  local typeBlk = 0
-  local dataBlk = 0
-  local bd = ''
+  local addrBlk, typeBlk, dataBlk, dataBlkLoc = 0, 0, 0, 0
+  local bd, bpc = '', ''
   local bc = '\27[37m'
   local curcol = '\27[37m'
-  io.write('\27[37m')
   
-  oA = udpM:match("^[%p%w]+")
-  oT = udpM:match(",%a+")
-  local addrPad = padtab[#oA % 4 + 1]
-  local addrBlk = #oA + addrPad
+  oA, oT, oD = oLvosc.oscUnpack(udpM)
+  addrBlk = align4(#oA)
+  
   if oT ~= nil then
-    typePad = padtab[#oT % 4 + 1]  
-    typeBlk = #oT + typePad
-    dataBlk = addrBlk + typeBlk
+    typeBlk = align4(#oT+1)
+    dataBlkLoc = addrBlk + typeBlk
+    dataBlk = #udpM - dataBlkLoc
   end
+  
+  io.write('\27[37m')
+  print('_____________________Info______________________')
+  print('   Address:\t'..oA)
+  print('     Types:\t'..oT)
+  print('ADDR bkSz','TYPE bkSz','DATA bkSz','DATA blk @')
+  print(addrBlk..'     \t\t'..typeBlk..'     \t\t'..dataBlk..'     \t\t'..dataBlkLoc)
+  
+  if dataBlkLoc > 0 then
+    print('_____________________Data______________________')
+    
+    oD = string.sub(udpM, dataBlkLoc + 1)
+    local ptab = oLvosc.oscDataUnpack(oT, oD)
+    for i, v in ipairs(ptab) do
+      local tc = oT:sub(i,i)
+      if string.find('sScifdhINTF[]', tc, 1 , true) then
+        print('    '..i..')', tc, v)
+      elseif tc == 'm' then
+        print('    '..i..')', tc,  'MIDI:', oLvosc.unpackMIDI(v))
+      elseif tc == 't' then
+        print('    '..i..')', tc,  'TIME:', oLvosc.unpackTIME(v))
+      elseif tc == 'b' then
+        local bls, _ = oLvosc.unpackBLOB(v)
+        print('    '..i..')', tc,  'BLOB (sz):', bls)
+      end
+    end
+  end
+  print()
+  
   print('___________________________________')
   print('______________Packet_______________')
   
   for i = 1, #udpM do
-    local d1, d2 = string.unpack('B', udpM, i)
-    bd = bd..string.format("%X\t",d1)
-    bc = bc..string.format("%c\t",d1)
+    local d1, d2 = string.unpack('B', udpM, i) -- get a single char
     
-    if i == dataBlk then  -- start of data
+    bd = bd..string.format("%X\t",d1)
+    bcp = string.format("%c",d1)
+     if i > dataBlkLoc then
+      bcp, _ = string.gsub(bcp, '[%c]', '.')  -- replace all cntl chars in data blk
+    end   
+    bc = bc..bcp..'\t'
+    
+    if i == dataBlkLoc then  -- start of data
       bd = bd..'\27[36m'
       curcol = '\27[36m'
     end
@@ -51,28 +85,11 @@ function oscDumpBin(udpM)
   
   print(bd)
   print(bc)
-
-  io.write('\27[37m')
-  if cnt ~= 0 then
-    print('\n\n')
-  end
-  print('_____________________Info______________________')
-  print('Addr bkSz:'..addrBlk, 'Type bkSz:'..typeBlk, 'Data blk @:'..dataBlk)
   
-  if dataBlk > 0 then
-    print('_____________________Data______________________')
-    
-    oD = string.sub(udpM, dataBlk + 1)
-    local ptab = oLvosc.oscDataUnpack(oT, oD)
-    for i, v in ipairs(ptab) do
-      local tc = oT:sub(i+1,i+1)
-      print('    '..i..')', tc, v)
-      if tc == 'm' then
-        print ('      MIDI: ', oLvosc.unpackMIDI(v))
-      end
-    end
+  if cnt ~= 0 then
+    print('\n')
   end
-  print()
+
 end
 
 -- +++++++++++++++++++++++++++++++++++++++++++++++++++

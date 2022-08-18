@@ -24,7 +24,31 @@ The **oLvosc** module is a 'pure Lua' library for encoding, decoding, sending an
 
 The server routine is non-blocking, a less-reliable approach in a complex Lua script.
 
-**oLvosc** currently only supports a sub-set of OSC messages. *Blobs* are not supported (yet).
+**oLvosc** currently only supports a sub-set of OSC messages. *Bundles* are not supported (yet).
+
+**The following types are currently supported:**
+
+  - s : string
+  - S : alt string (symbol)
+  - c : a char (32 bit int)
+  - i : int (32-bit)
+  - m : MIDI data, four bytes: channel, status, d1, d2
+  - t : TIME data, two 32 ints: seconds, fraction of seconds
+  - f : float (32-bit)
+  - b : BLOB data, binary bytes
+  - h : signed int (64-bit)
+  - d : double float (64-bit)
+
+The following have NO data block (but are DEcoded to a string: 'NIL', 'TRUE', etc...
+
+  - N : NIL
+  - T : TRUE
+  - F : FALSE
+  - I : Infinitum
+  - [ : Array begin
+  - ] : Array end
+
+Some of these (notably the array brackets) are experimental, as there's no universally-accepted interpretation for their usage. The 'c' tag (char) is also subject to interpretation. Here it is implemented as a utf8 unicode char. Other libraries limit the char to ASCII.
 
 ## About *oLvoscT* 
 
@@ -64,9 +88,9 @@ A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://gi
 
 ## oLvosc Data Functions
 
-`packet = oLvosc.oscPacket(address_str, type_str, msg_table)`
+`packet = oLvosc.oscPacket(address_str, type_str, data_table)`
 
-  * Encodes an address string, a type string and a table of messages into a UDP packet
+  * Encodes an address string, a type string and a table of data into a UDP packet
     * packet is ready for sending ( oLvosc.sendOSC(server, packet) )
 
 `address_str, type_str, data = oLvosc.oscUnpack(packet)`
@@ -99,11 +123,9 @@ A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://gi
 
   * Decodes a MIDI sub-packet into the four original bytes
 
-## New with 0.1.2:
+`blob_size, blob_data = oLvosc.unpackBLOB(blob)`
 
-### Data tag 't' added: OSC Timetag
-
-  * Encoding and decoding, sending and receiving of timetags 't' added to data functions.
+  * Decodes a blob to an integer (size of data), and a data block
 
 ### Time functions
 
@@ -125,6 +147,29 @@ A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://gi
 
   * Takes a timetag binary packet
   * Returns time in seconds, fractions of seconds
+
+## New with 0.1.2
+
+### Tags: 'I', 'T', 'F', 'N', '[', ']' Added
+
+These are non-data bearing tags, so be sure to read the section on building packets with that type.
+
+### Data tag 'c' tag added: single character
+
+The 'c' tag sends a single character, sent in a 32-bit chunk. In this implimentation it's a utf8 unicode char. That also means that simple ASCII chars also work fine.
+
+Passing a char is as simple as using quotes & Lua strings:  Examples: '✔' or '‡'
+
+### Data tag 't' added: OSC Timetag
+
+  * Encoding and decoding, sending and receiving of timetags 't' added to data functions.
+
+The 't' tag is an OSC-compliant time tag & data block.
+
+  * 't' tag
+  * 8-byte data block, consisting of
+    * 32 int of seconds (since Jan 1 1900)
+    * 32-bit in of additional fractions of seconds
 
 
 ## oLvosc Examples
@@ -156,19 +201,43 @@ local packet
     packet = oLvosc.oscPacket('/goto_start')
 	oLvosc.sendOSC(cudp, packet) 
 
-        -- send Ardour a message, with a type and a message table
+        -- send Ardour a message, with a string type and a data table with one entry:
 
     packet = oLvosc.oscPacket('/access_action', 's', {'Editor/track-record-enable-toggle'})
     oLvosc.sendOSC(cudp, packet)
 
         -- something more complicated, a message for pd2jack
-        -- this is an osc msg with **string, int, int** fields, per the type string
+        -- this is an osc msg with 'string, int, int' fields, per the type string 'ssi'
 
     local mymsg = {"@sendprogc", chordChan, index}
 
     local packet = oLvosc.oscPacket('/P2Jcli/0/cmd', 'sii', mymsg)
     oLvosc.sendOSC(cudp, packet)
 ```
+### Preparing packets with non-data bearing tags
+
+All tags without accompanying data ('I T F N [ ]') are required to include a 'placeholder' in the data table before passing to oLvosc.oscPacket().
+
+```
+    -- Sending a string, an integer, and a 'TRUE' tag
+    --   Type str:   'siT'
+
+    -- in this example the placeholder is an empty string
+    local mymsg = {"@sendprogc", index, ''}
+
+    -- anything (but nil) will work as a placeholder, so all the following are valid:
+    mymsg = {"@sendprogc", index, '-'}
+    mymsg = {"@sendprogc", index, 'T'}
+    mymsg = {"@sendprogc", index, 'TRUE'}
+    mymsg = {"@sendprogc", index, 'blablabla'}
+
+    local packet = oLvosc.oscPacket('/P2Jcli/0/cmd', 'siT', mymsg)
+    oLvosc.sendOSC(cudp, packet)
+```
+
+Lua has very limited typecasting, so it would be difficult to differentiate between ints, floats, etc. Entries in both the TYPE string and the DATA table are required. 
+
+From a code *readability* standpoint it's also very helpful to have a one-to-one correspondence between TYPE and DATA fields.
 
 ### Open a server socket (receiving, non-blocking)
 
