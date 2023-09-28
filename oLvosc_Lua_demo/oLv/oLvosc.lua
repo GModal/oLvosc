@@ -199,6 +199,27 @@ function oLvosc.close(udp)
     udp:close()
   end
 end
+--check if packet is a bundle
+function oLvosc.isBundle(udpM)
+  local b = udpM:match("^#bundle")
+  return b ~= nil
+end
+-- parse multiple messages as a table of unpacked messages via oLvosc.oscUnpack
+-- {{oscADDR, oscTYPE, oscDATA}, {oscADDR, oscTYPE, oscDATA}, ...}
+function oLvosc.oscUnpackBundle(udpM)
+  local mpos = 17 -- skip '#bundle+timestamp'
+  local packed_messages = udpM
+  local num_bytes = string.len(packed_messages)
+  -- bundle message pattern: size(4byte) followed by regular message
+  local parsed_messages = {}
+  while mpos < num_bytes do
+    local packet_size = oLvpk.unpack(">i", packed_messages:sub(mpos, mpos + 4))
+    local oscADDR, oscTYPE, oscDATA = oLvosc.oscUnpack(packed_messages:sub(mpos + 4, mpos + 4 + packet_size))
+    table.insert(parsed_messages, {oscADDR, oscTYPE, oscDATA})
+    mpos = mpos + 4 + packet_size
+  end
+  return parsed_messages
+end
 -- unpack UDP OSC msg packet into:
 --	oscAddr = oA
 --	oscType = oT
