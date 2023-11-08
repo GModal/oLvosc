@@ -21,7 +21,6 @@ if love ~= nil then
 else
   oLvpk= {pack = lpak, unpack = string.unpack}
 end
-
 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
 -- osc private functions
 local endpad = string.char(0, 0, 0, 0)
@@ -53,12 +52,23 @@ function padBin(binD)
   for i=1, align4(#binD)-#binD do nwD = nwD..string.char(0) end
   return nwD
 end
-
--- returns int secs, int fraction, float fraction, epoch time
+-- +++++++++++++++++++++++++++++++++++++++++++++++++++
+-- OSC timetag immediate constant
+oLvosc.TT_IMMEDIATE = oLvpk.pack('string','>i8', 1)
+--takes an NTP pair, converts to Epoch
+function oLvosc.NTPtoEPOCH(sec, frac)
+	return((sec + 1/frac) - 2208988800)
+end
+-- takes an Epoch value, converts to NTP and returns int secs, int fraction, float fraction
+function oLvosc.EPOCHtoNTP(epo)
+	local i,f  = math.modf(epo + 2208988800)
+    return i, math.floor(f * 2147483647), f
+end
+-- returns current time: int secs, int fraction, float fraction, epoch time
 function oLvosc.time()
   local tm = socket.gettime()
-  local i,f  = math.modf(tm + 2208988800)
-    return i, math.floor(f * 2147483647), f, tm
+	local i, fi, f = oLvosc.EPOCHtoNTP(tm)
+    return i, fi, f, tm
 end
 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
 -- some utility functions
@@ -75,12 +85,12 @@ function oLvosc.unpackMIDI(mPack)
 end
 
 function oLvosc.packTIME(tsec, tfrac)
-  local tpk = oLvpk.pack('string','II', tsec, tfrac)
+  local tpk = oLvpk.pack('string','>I>I', tsec, tfrac)
   return tpk
 end
 
 function oLvosc.unpackTIME(tPack)
-  local tsec, tfrac = oLvpk.unpack('II', tPack)
+  local tsec, tfrac = oLvpk.unpack('>I>I', tPack)
   return tsec, tfrac
 end
 
@@ -142,10 +152,10 @@ else
         elseif types == 'f' then
           strl = strl..oLvpk.pack('string', '>f', msgTab[argC])
         elseif types == 'i' then
-          strl = strl..oLvpk.pack('string', '>i', msgTab[argC])
+          strl = strl..oLvpk.pack('string', '>i4', msgTab[argC])
         elseif types == 'b' then 
           local tBlb = padBin(msgTab[argC])
-          strl = strl..oLvpk.pack('string', '>i', #msgTab[argC])..tBlb
+          strl = strl..oLvpk.pack('string', '>i4', #msgTab[argC])..tBlb
         elseif types == 'h' then
           strl = strl..oLvpk.pack('string', '>i8', msgTab[argC])
         elseif types == 'd' then
@@ -165,6 +175,72 @@ else
     end
   end
 return(strl)
+end
+-- ++++++++++++++++++++++++++++++++++++++++++++++++++++
+-- BUNDLE packet code 
+--		This code has few error checks...
+--		DON'T create circular references (like adding a bundle to itself).
+
+-- create a new (empty) bundle dt structure
+--		<time> is an OSC time packet
+--			If <time> == nil, then time is set to immediate.
+function oLvosc.newBundle(time)
+	if time == nil then time = oLvosc.TT_IMMEDIATE end
+	local bundle = {}
+	bundle.ID = 'bun'
+	bundle.time = time
+	bundle.elemNum = 0
+	bundle.isUnlocked = true
+	bundle.size = 16 -- base size of a bundle without elems
+	bundle.elems = {}
+	return (bundle)
+end
+-- add a message to a bundle dt structure
+function oLvosc.addMsgToBundle(bundle, msgPack)
+	local message = {}
+	if bundle == nil or bundle.ID ~= 'bun' or msgPack == nil then return (false) end
+	if bundle.isUnlocked then
+		bundle.elemNum = bundle.elemNum + 1
+		message.ID = 'msg'
+		message.body = msgPack
+		message.size = string.len(msgPack)
+		bundle.size = bundle.size + message.size + 4 -- add new msgs size to bundle
+		table.insert(bundle.elems, message)
+	end
+	return(bundle.isUnlocked)
+end
+-- add a populated bundle to an existing bundle in a dt struture
+--		No additional data can be added to the child bundle after this operation.
+function oLvosc.addBundleToBundle(parentBundle, childBundle)
+	if parentBundle == nil or parentBundle.ID ~= 'bun' or childBundle == nil or childBundle.ID ~= 'bun' then return (false) end
+	if parentBundle.isUnlocked then
+		parentBundle.elemNum = parentBundle.elemNum + 1
+		parentBundle.size = parentBundle.size + childBundle.size + 4 -- add new bundle size to bundle
+		childBundle.isUnlocked = false
+		table.insert(parentBundle.elems, childBundle)
+	end
+	return(parentBundle.isUnlocked)
+end
+-- create a bundle packet from a bundle dt structure
+--	call with the populated bundle dt structure as the single arg: 
+--			local bpacket = oLvosc.oscBundlePack(myBundle_dt)
+--	returns a transmissible osc packet.
+function oLvosc.oscBundlePack(bun_dt, level)
+	local bpacket = ''
+	if level == nil then level = 1 end
+	if type(bun_dt) == 'table' and bun_dt.ID == 'bun' then
+		local tsec, tfrac = oLvosc.unpackTIME(bun_dt.time) 
+		bpacket = bpacket..'#bundle\0'..bun_dt.time
+		for  _,be in ipairs(bun_dt.elems) do
+			if be.ID == 'bun' then
+				bpacket = bpacket..oLvpk.pack('string', '>i4',be.size)
+				bpacket = bpacket..oLvosc.oscBundlePack(be, level + 1)
+			elseif be.ID == 'msg' then
+				bpacket = bpacket..oLvpk.pack('string', '>i4',be.size)..be.body
+			end	
+		end
+	end
+	return(bpacket)
 end
 -- osc client functions END
 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -201,34 +277,68 @@ function oLvosc.close(udp)
 end
 --check if packet is a bundle
 function oLvosc.isBundle(udpM)
-  local b = udpM:match("^#bundle")
-  return b ~= nil
+local iv = nil
+local b = udpM:match("^#bundle")
+	if b ~= nil then
+		iv, _ = oLvpk.unpack("c8", string.sub(udpM, 9, 16))
+	end
+return iv
 end
--- parse multiple messages as a table of unpacked messages via oLvosc.oscUnpack
--- {{oscADDR, oscTYPE, oscDATA}, {oscADDR, oscTYPE, oscDATA}, ...}
-function oLvosc.oscUnpackBundle(udpM)
-  local mpos = 17 -- skip '#bundle+timestamp'
-  local packed_messages = udpM
-  local num_bytes = string.len(packed_messages)
-  -- bundle message pattern: size(4byte) followed by regular message
-  local parsed_messages = {}
-  while mpos < num_bytes do
-    local packet_size = oLvpk.unpack(">i", packed_messages:sub(mpos, mpos + 4))
-    local oscADDR, oscTYPE, oscDATA = oLvosc.oscUnpack(packed_messages:sub(mpos + 4, mpos + 4 + packet_size))
-    table.insert(parsed_messages, {oscADDR, oscTYPE, oscDATA})
-    mpos = mpos + 4 + packet_size
-  end
-  return parsed_messages
+-- recursively flatten the nested tables in an unpacked bundle to a simple table list of the msgs
+--		set the <filter> str arg to 'm' (message only) or 'b' (bundle only), no filter arg == both
+function oLvosc.bundleResultsToList(results, filter)
+	local rdata = {}
+	if type(results) == 'table' then
+		for _, elem in ipairs(results) do
+			if type(elem) == 'table' then
+				if elem[1] == 'msg' and filter ~= 'b'  then
+					table.insert(rdata, elem)
+				elseif elem[1] == 'bun' and filter ~= 'm'  then
+					table.insert(rdata, elem)
+				else
+					local tmpdata = oLvosc.bundleResultsToList(elem, filter)
+					for _,inlst in ipairs(tmpdata) do
+						table.insert(rdata, inlst)
+					end
+				end
+			end	
+		end
+	end
+	return(rdata)
+end
+--recursively unpack a bundle
+--	returns a table of nested msgs and sub-bundles
+--  Original (non-recursive) oscUnpackBundle() function by halee88 (https://github.com/halee88)
+function oLvosc.oscUnpackBundle(packet, level)
+local mpos = 17 -- skip '#bundle+timestamp'
+local packet_size
+local num_bytes = string.len(packet)
+local parsed_messages = {}
+	if level == nil then level = 1 end
+	local tc, _ = oLvpk.unpack("c8", string.sub(packet, 9, 16))
+	local tsec, tfrac = oLvosc.unpackTIME(tc)
+	table.insert(parsed_messages, {'bun', level, tsec, tfrac})  
+	while mpos < num_bytes do
+		packet_size = oLvpk.unpack(">i", packet:sub(mpos, mpos + 4))
+		local bunElem = packet:sub(mpos + 4, mpos + 4 + packet_size)
+		if oLvosc.isBundle(bunElem) then
+			table.insert(parsed_messages, oLvosc.oscUnpackBundle(bunElem, level + 1))
+		else
+			local subPacket = bunElem:sub(1, packet_size)
+			table.insert(parsed_messages, {'msg', level, tc, subPacket})
+		end
+		mpos = mpos + 4 + packet_size
+	end
+	return parsed_messages
 end
 -- unpack UDP OSC msg packet into:
 --	oscAddr = oA
 --	oscType = oT
 --	oscData = oD
--- **************************
 function oLvosc.oscUnpack(udpM)
 local oA ,oT, oD
   
-	oA = udpM:match("^[%p%w]+%z+")
+  oA = udpM:match("^[%p%w]+%z+")
   oT = udpM:match(',[%a%[+%]+]+')
   if oA ~= nil then
     local aBlk = #oA 
@@ -319,7 +429,7 @@ local dTbl = {}
         oD = string.sub(oD, 9)
         table.insert(dTbl, tonumber(iv))
       elseif tc == 'I' then
-        table.insert(dTbl, 'INFINITUM')
+        table.insert(dTbl, 'IMPULSE')
       elseif tc == 'T' then
         table.insert(dTbl, 'TRUE')
       elseif tc == 'F' then

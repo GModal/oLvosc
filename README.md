@@ -2,7 +2,7 @@
 **oLvosc** is an OSC ( *Open Sound Control* ) module for Lua and LÖVE. It's in two parts:
 
   * oLvosc
-     * The main OSC module, which works in Lua (V5.3 or greater) or LÖVE (tested on 11.3)
+     * The main OSC module, which works in Lua (V5.3 or greater) or LÖVE (tested on 11.3, some testing on 11.4)
   * oLvoscT
      * The threaded server module, for LÖVE (tested on 11.3) only
 
@@ -24,16 +24,17 @@ The **oLvosc** module is a 'pure Lua' library for encoding, decoding, sending an
 
 The server routine is non-blocking, a less-reliable approach in a complex Lua script.
 
-**oLvosc** currently only supports a sub-set of OSC messages. *Bundles* are not supported (yet).
+**oLvosc** supports a large sub-set of OSC protocols. As of 0.2.4, *Bundles* **are** supported.
 
 **The following types are currently supported:**
 
   - s : string
-  - S : alt string (symbol)
+  - S : synonym for 's' (or symbol)
   - c : a char (32 bit int)
   - i : int (32-bit)
+  - r : rgb (another 32-bit int)
   - m : MIDI data, four bytes: channel, status, d1, d2
-  - t : TIME data, two 32 ints: seconds, fraction of seconds
+  - t : TIME tag, two 32 ints: seconds, fraction of seconds
   - f : float (32-bit)
   - b : BLOB data, binary bytes
   - h : signed int (64-bit)
@@ -44,7 +45,7 @@ The following have NO data block (but are DEcoded to a string: 'NIL', 'TRUE', et
   - N : NIL
   - T : TRUE
   - F : FALSE
-  - I : Infinitum
+  - I : IMPULSE (was INFINITUM)
   - [ : Array begin
   - ] : Array end
 
@@ -61,6 +62,8 @@ As a separate thread it is more reliable than the standard non-blocking OSC serv
 The docs for the console-only [Lua demos is here](https://github.com/GModal/oLvosc/blob/main/oLvosc_Lua_demo/README.md).
 
 A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://github.com/GModal/oLvgui/blob/main/oLvDemos.md) (not all demo feature OSC) and the [demo source code](https://github.com/GModal/oLvgui/tree/main/demo_src) also.
+
+![](resource/line1.png)
 
 ## oLvosc Network Functions
 
@@ -85,6 +88,7 @@ A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://gi
 
   * Closes any open socket
 
+![](resource/line1.png)
 
 ## oLvosc Data Functions
 
@@ -127,7 +131,9 @@ A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://gi
 
   * Decodes a blob to an integer (size of data), and a data block
 
-### Time functions
+![](resource/line1.png)
+
+  - ### Time functions
 
 `time_secs, time_fraction, fraction_as_float, epoch_time = oLvosc.time()`
 
@@ -136,6 +142,16 @@ A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://gi
     * Additional fraction of second (32 bit integer)
     * That fraction as a float
     * The current time as Unix 'Epoch' time
+
+`Epoch_time = oLvosc.NTPtoEPOCH(sec, frac)`
+
+  * `<sec><frac>`: the seconds, fractions of a second of NTP time
+  * Returns that time in Epoch time
+
+`time_secs, time_fraction, float fraction = function oLvosc.EPOCHtoNTP(epoch)`
+
+  * `<epoch>` : time in Epoch format
+  * Returns NTP time : `<time_secs>, <time_fraction>` and the fraction as a float
 
 `time_packet = oLvosc.packTIME(time_seconds, time_fraction)`
 
@@ -148,11 +164,128 @@ A brief synopsis of the LÖVE [demos is available on the oLvgui repo](https://gi
   * Takes a timetag binary packet
   * Returns time in seconds, fractions of seconds
 
+  - ### Time Constants:
+
+`timetag = oLvosc.TT_IMMEDIATE`**
+
+  * This constant creates an OSC "immediate time tag", a part of the OSC 1.0 bundle spec.
+  * It's interpreted as **NOW**.
+
+![](resource/line1.png)
+
+## oLvosc Bundle Support
+
+As of version 0.2.4., **oLvosc** now supports bundles! Bundles can be nested per the OSC 1.0 spec. The current code does this recursively -- see **oLvosc.addBundleToBundle()**. This works for both decoding and creating bundles.
+
+Thanks to Github user [halee88](https://github.com/halee88) for contributing the initial bundle unpacking function.
+
+## Bundle Packet Decoding 
+
+  - ### Functions:
+
+The **oLvosc.oscUnpackBundle()** function returns a bundle "tree" structure. This table includes all the embedded message and timetag data, and also a "level" value, which indicates how deeply "nested" the bundle is within the tree.
+
+`timetag = oLvosc.isBundle(packet)`
+
+  * Returns an oLvosc timetag if the packet is a bundle, nil if not.
+
+`bundle_tree = oLvosc.oscUnpackBundle(packet [, level])`
+
+  * Returns a bundle in a "tree" structured table.
+  * `<level>` sets the starting level of the tree. It's optional when called, as it's *real* use is to recursively find the current depth of the nested data.
+
+`bundle_list = oLvosc.bundleResultsToList(bundle_tree [, filter])`
+
+  * Returns a "flattened" version of the results of **oLvosc.oscUnpackBundle()**. I.E., it converts the tree structure to a flat list.
+  * The "level" information is still retained in the list.
+  * `<filter>` set the type of information returned in the list:
+    * `<'b'>` : returns only bundle info
+    * `<'m'>` : returns only messages
+
+## Bundle Creation
+
+The bundle packet creation routines are described below. This code has **some** error checking, but it's a still a light-weight implementation... DON'T create circular references (like adding a bundle to itself).
+
+Before generating a bundle packet, use these function to build a bundle "data table," which is a simple tree structure table. This table is NOT identical to the tree structure returned by **oLvosc.oscUnpackBundle()**.
+
+  - ### Constants:
+
+`timetag = oLvosc.TT_IMMEDIATE`
+
+  * This constant creates an OSC "immediate time tag", a part of the OSC 1.0 bundle spec.
+  * It's interpreted as **NOW**.
+
+  - ### Functions:
+
+`bundle_dt = oLvosc.oLvosc.newBundle(oscTimetag)`
+
+  * Creates a new, empty bundle_dt (data table), and sets the timetag.
+
+A bundle_dt is a data table which holds the bundle
+structure & data, pre-build. A bundle osc packet is built
+from this preliminary information & framework.
+
+`bool = oLvosc.addMsgToBundle(bundle_dt, msg_packet)`
+
+  * Add an osc Msg packet to a bundle_dt
+  * if rval == false, the bundle is locked (or the bundle is invalid).
+
+`nil = oLvosc.addBundleToBundle(parentBundle, childBundle)`
+
+  * No additional data can be added to the child (sub-bundle) after this operation.
+  * Once added, the child bundle is locked, and addMsgToBundle() won't function on the child.
+
+Therefore, sub-bundles should be fully populated before adding to a parent bundle. However, additional elements (msgs & bundles) can be added to the parent bundle.
+
+`bundle_packet = oLvosc.oscBundlePack(bundle_dt)`
+
+  * Generate a transmissible bundle packet from a populated bundle_dt.
+
+  - ### Sending bundles
+
+Bundles packets are sent like any other OSC packet -- with **oLvosc.sendOSC()**
+
+### Example of a bundle structure (formatted)
+
+Below is a screen capture of a bundle-formatted display in **oscMonD** (in LÖVE), illustrating the tree structure of *this* bundle.
+
+This is very similar to the output of other formatting helpers in the utility scripts. The *oscdump.lua* script creates a very similar display in a shell. 
+
+![tinaV1 pic](resource/bundle_format_sml.png)
+
+(The osc bundle was generated randomly with the *sendrandpacket.lua* script.)
+
+### Bundle Support routines:
+
+While not built into the oLvosc library module, there are useful utility routines in the demo folder. They include functions to:
+
+  * View a bundle "tree" structure
+  * Search a bundle structure
+  * View the bundle data table, pre-packet
+  * Screen-formatting functions (displaying msgs)
+
+![](resource/line1.png)
+
 ## New with 0.1.2
+
+The types below are part of the OSC 1.0 specifications, but are "optional." The only required types in 1.0 are ‘i f s b’ (int, float, string, blob).
+
+###Required types in V1.1 supported in oLvosc
+
+  - i : Integer: two’s complement int32
+  - f : Float: IEEE float32
+  - s : NULL-terminated ASCII string
+  - b : Blob, (aka byte array) with size
+  - T : True: No bytes are allocated in the argument data.
+  - F : False: No bytes are allocated in the argument data.
+  - N : Null: (aka nil, None, etc). No bytes are allocated in the argument data.
+  - I : Impulse: (aka “bang”), used for event triggers. No bytes are allocated in the argument data. This type was named “Infinitum” in OSC 1.0 optional types.
+  - t : Timetag: an OSC timetag in NTP format, encoded inthe data section
+
 
 ### Tags: 'I', 'T', 'F', 'N', '[', ']' Added
 
-These are non-data bearing tags, so be sure to read the section on building packets with that type.
+These are non-data bearing typetags, so be sure to read the section on building packets with that type. 
 
 ### Data tag 'c' tag added: single character
 
@@ -160,7 +293,7 @@ The 'c' tag sends a single character, sent in a 32-bit chunk. In this implimenta
 
 Passing a char is as simple as using quotes & Lua strings:  Examples: '✔' or '‡'
 
-### Data tag 't' added: OSC Timetag
+### Data typetag 't' added: OSC Timetag
 
   * Encoding and decoding, sending and receiving of timetags 't' added to data functions.
 
@@ -171,6 +304,13 @@ The 't' tag is an OSC-compliant time tag & data block.
     * 32 int of seconds (since Jan 1 1900)
     * 32-bit in of additional fractions of seconds
 
+### Data typetags 'r', 'd', 'h' added: 
+
+  - 'r' : rgb
+  - 'd' : double float
+  - 'h' : double int
+
+![](resource/line1.png)
 
 ## oLvosc Examples
 
@@ -239,6 +379,35 @@ Lua has very limited typecasting, so it would be difficult to differentiate betw
 
 From a code *readability* standpoint it's also very helpful to have a one-to-one correspondence between TYPE and DATA fields.
 
+
+### Creating and sending a nested bundle packet
+
+```
+    --create empty bundle dt's (bundle data tables)
+    local parent = oLvosc.newBundle(oLvosc.packTIME(2, 32555))
+    local child = oLvosc.newBundle(oLvosc.TT_IMMEDIATE)
+
+    -- populate the child bundle
+    local packetC1 = oLvosc.oscPacket('/myOSC/child', 'ff', { 23.3333 , 65.5} )
+    oLvosc.addMsgToBundle(child, packetC1)
+
+    -- populate the parent bundle
+    local packetP1 = oLvosc.oscPacket('/myOSC/parent', 'is', { 44434 , 'A msg'} )
+    local packetP2 = oLvosc.oscPacket('/myOSC/parent', 'ifs', { 1 , 34.255, 'Sending CC Mod'} )
+    oLvosc.addMsgToBundle(parent, packetP1)
+    oLvosc.addMsgToBundle(parent, packetP2)
+
+    -- add the child bundle to the parent bundle
+    oLvosc.addBundleToBundle(parent, child)
+
+    -- build the bundle packet
+    local bundlePacket = oLvosc.oscBundlePack(parent)
+
+    -- send it
+    oLvosc.sendOSC(cli, bundlePacket)
+```
+
+
 ### Open a server socket (receiving, non-blocking)
 
 ```
@@ -253,14 +422,13 @@ local sudp
 	sudp = oLvosc.servSetup('0.0.0.0', 8000)
 ```
 
-### The server function
+### A server function
 
 ```
 -- poll the OSC server 
 function myServ(server_socket)
   local packet = oLvosc.oscPoll(server_socket)
 	if packet ~= nil then
-    --oLvosc.oscDumpBin(packet)
 
         local oscADDR, oscTYPE, oscDATA = oLvosc.oscUnpack(packet)
         local dataT = oLvosc.oscDataUnpack(oscTYPE, oscDATA)
@@ -278,6 +446,43 @@ function myServ(server_socket)
 end
 ```
 
+### A server function with bundle support
+
+  - This function only receives and prints bundles -- and a short synopsis of the messages within.
+
+```
+
+-- make unpack work with lua 5.3+ or LÖVE
+local unpack = unpack or table.unpack
+
+-- poll the OSC server 
+function myServ(server_socket)
+    local packet = oLvosc.oscPoll(server_socket)
+	if packet ~= nil then
+
+        if oLvosc.isBundle(packet) then -- handle bundled messages
+            local bundle_unpack = oLvosc.oscUnpackBundle(packet, 1)
+
+            -- flatten bundle to list,
+            -- then print synopsis info (no msg data)
+
+            local bunlist = oLvosc.bundleResultsToList(bundle_unpack)
+            for _, blist in ipairs(bunlist) do
+                if blist[1] == 'msg' then
+                    local dType, level, tc, oscPACKET = unpack(packet)
+                    local oscADDR, oscTYPE, oscDATA = oLvosc.oscUnpack(oscPACKET)
+                    local tsec, tfrac = oLvosc.unpackTIME(tc)
+                    print(label, ' Msg     '..oscADDR, oscTYPE, 'Level: '.. level..'   Time: ['..tsec..':'..tfrac..']' )
+                elseif blist[1] == 'bun' then
+                    local dType, level, tsec, tfrac = unpack(packet)
+                    print(label, 'Bundle   Level: '..level..'   Time: ['..tsec..':'..tfrac..']' )
+                end
+            end
+        end
+    end
+end
+```
+
 ### Call the server from love.update() or love.draw()
 
 ```
@@ -289,7 +494,7 @@ end
 
 ### Close the socket
 
-Close works with client & server sockets.
+**close()** works with both client & server sockets.
 
 ```
 oLvosc.close(any_socket)
@@ -396,8 +601,9 @@ function oLvquit()
   local tchn = oLvoscT.getTermChan(chanName)    -- get the channel to terminate the thread
   oLvoscT.closeServ(tchn)                       -- send a close msg over that channel
 
-                     -- wait for server thread to close...(hint, the wait is the timeout value)
-                           -- unless there's incoming OSC data, then it's faster...
+    -- wait for server thread to close...(hint, the wait is the timeout value)
+    -- unless there's incoming OSC data, then it's faster...
+
   threadT:wait( )
                      -- exit LÖVE normally
   love.event.quit()
